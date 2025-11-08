@@ -1,0 +1,15 @@
+{
+  "server": {
+    "port": 13155,
+    "cert_file": "server/cert.pem",
+    "key_file": "server/key.pem"
+  },
+  "database": {
+    "host": "localhost",
+    "port": 3306,
+    "user": "root",
+    "password": "",
+    "dbname": "bamsystem"
+  }
+}
+

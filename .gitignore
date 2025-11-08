@@ -1,0 +1,14 @@
+*.key
+Card/*
+*.o
+*.exe
+*.dll
+*.lib
+*.a
+*.so
+*.dylib
+*.bundle
+*.jar
+*.war
+*.ear
+*.zip
