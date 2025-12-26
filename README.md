@@ -254,12 +254,13 @@ sudo ldconfig  # 更新库缓存
 
 ## 开发团队
 
-BAMSYSTEM团队 成员:- Dirinkbottle（周雨） 网络API,服务器等模块
-                 :- 彭爽爽 -> 文件模块
-                 :-全伟    -> ui模块
-                 :-李雨峰  -> 开户模块
-                 :-任荣基  -> 存款，转账模块
-                 :-闫攀    -> 销户模块
+BAMSYSTEM团队:
+- 周雨(Dirinkbottle):负责核心代码开发工作
+- 彭爽爽:
+- 李雨峰:
+- 全伟:
+- 闫攀:
+- 任荣基:
 
 ## 许可证
 
@@ -286,5 +287,5 @@ BAMSYSTEM团队 成员:- Dirinkbottle（周雨） 网络API,服务器等模块
 
 ## 联系方式
 
-- GitHub: https://github.com/BAMSYSTEM
+- GitHub: https://github.com/Dirinkbottle
 - 问题反馈: 请在GitHub Issues中提交

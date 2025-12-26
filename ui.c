@@ -18,6 +18,7 @@ static const char *BUSINESS_MENU[] = {
     "3.账户取款         \n",
     "4.账户转账         \n",
     "5.注销账户         \n",
+    "6.生成测试账户   \n",
     "0.退出系统         \n"
 };
 
@@ -139,6 +140,13 @@ int ui_loop(void)
             getchar();
             break;
 
+        case 6:
+            /* 生成测试账户 */
+            generate_test_account();
+            PRINTF_G("\n按回车键继续...");
+            consume_stdin();
+            getchar();
+            break;
             
         default:
             /* 无效选项 */

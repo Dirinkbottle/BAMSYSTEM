@@ -44,7 +44,7 @@ typedef struct {
 /**
  * @brief 初始化服务器API模块
  * @return 成功返回true，失败返回false
- * @note 必须在使用任何API函数前调用
+ * @note 必须在使用任何API函数前调用 含有服务器API地址设置 属性字段
  */
 bool init_server_api(void);
 

@@ -41,6 +41,9 @@ int main(void)
             printf("✓ 运行模式: 联网版本（服务器已连接）\n");
             printf("\n========== 开始双向同步 ==========\n");
             
+            /* 证书请求 */
+            /* fetch_server_certificate(); 功能暂时搁置 */
+            
             /* 第一步：推送本地账户到服务器 */
             int pushed = sync_all_accounts_to_server();
             
@@ -62,6 +65,9 @@ int main(void)
     
     /* 进入UI主循环 */
     ui_loop();
+    
+    /* 清理账户系统资源 */
+    cleanup_account_system();
     
     /* 清理服务器API资源 */
     cleanup_server_api();

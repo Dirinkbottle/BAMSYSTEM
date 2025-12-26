@@ -34,10 +34,30 @@ typedef long long unsigned int LLUINT; //最大取决于机器位数。可以尝
  */
 typedef struct account
 {
-    char UUID[37];      /** 唯一标识符（36字符+'\0'）8-4-4-4-12\0 */
+    char UUID[37];     /** 唯一标识符（36字符+'\0'）8-4-4-4-12\0 */
     LLUINT PASSWORD;    /** 密码（7位数字） */
     LLUINT BALANCE;     /** 账户余额（单位：分） */
 } ACCOUNT;
+
+/**
+ * @brief Hash 表节点结构（链地址法）
+ */
+typedef struct AccountNode
+{
+    ACCOUNT account;              /** 账户数据 */
+    struct AccountNode *next;     /** 链表下一个节点 */
+} AccountNode;
+
+/**
+ * @brief 账户 Hash 表结构
+ */
+typedef struct
+{
+    AccountNode **buckets;        /** 桶数组 */
+    size_t size;                  /** 当前桶数量 */
+    size_t count;                 /** 账户总数 */
+    double load_factor_threshold; /** 扩容阈值（默认 0.75） */
+} AccountHashTable;
 
 
 
@@ -48,6 +68,53 @@ typedef struct account
  * @return 成功返回true，失败返回false
  */
 bool init_account_system(void);
+
+/**
+ * @brief 清理账户系统资源
+ */
+void cleanup_account_system(void);
+
+/* ==================== Hash 表管理 ==================== */
+
+/**
+ * @brief 初始化账户 Hash 表
+ * @return 成功返回true，失败返回false
+ */
+bool init_account_hash_table(void);
+
+/**
+ * @brief 清理账户 Hash 表
+ */
+void cleanup_account_hash_table(void);
+
+/**
+ * @brief 插入账户到 Hash 表
+ * @param acc 账户结构体指针
+ * @return 成功返回true，失败返回false
+ */
+bool hash_insert_account(const ACCOUNT *acc);
+
+/**
+ * @brief 从 Hash 表查找账户
+ * @param uuid 账户UUID
+ * @return 找到返回账户指针，未找到返回NULL
+ * @note 返回的指针指向Hash表内部数据，不要释放
+ */
+ACCOUNT* hash_find_account(const char *uuid);
+
+/**
+ * @brief 更新 Hash 表中的账户
+ * @param acc 账户结构体指针
+ * @return 成功返回true，失败返回false
+ */
+bool hash_update_account(const ACCOUNT *acc);
+
+/**
+ * @brief 从 Hash 表删除账户
+ * @param uuid 账户UUID
+ * @return 成功返回true，失败返回false
+ */
+bool hash_delete_account(const char *uuid);
 
 /* ==================== UUID生成 ==================== */
 
@@ -170,5 +237,11 @@ int get_all_account_uuids(char uuids[][37], int max_count);
  * @note 仅在服务器模式下有效，会覆盖本地同UUID账户
  */
 int pull_accounts_from_server(void);
+
+/**
+ * @brief 生成测试账户
+ * @note  测试系统性能
+ */
+bool generate_test_account(void);
 
 #endif /* ACCOUNT_H */

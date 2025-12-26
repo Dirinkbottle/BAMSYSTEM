@@ -49,7 +49,16 @@ typedef struct {
 /* ==================== 内部辅助函数声明 ==================== */
 
 /* 这些函数总是需要的（用于 generate_client_id） */
+
+/**
+ * @brief SHA256哈希计算
+ * @param data 输入数据
+ * @param len 数据长度
+ * @param output 输出哈希字符串（65字节）
+ */
 static void sha256_hash(const unsigned char *data, size_t len, char *output);
+
+
 static void bytes_to_hex(const unsigned char *bytes, size_t len, char *hex);
 
 /* 这些函数仅在网络模式下需要 */
@@ -201,10 +210,10 @@ bool load_server_config(void)
     
     /* 初始化默认配置 */
     memset(&g_config, 0, sizeof(ServerConfig));
-    g_config.port = 443;
-    g_config.timeout = 10;
-    g_config.use_https = true;
-    g_config.verify_cert = true;
+    g_config.port = 13155;
+    g_config.timeout = 5;
+    g_config.use_https = false;
+    g_config.verify_cert = false;
     
     char line[512];
     char current_section[64] = "";
@@ -397,12 +406,12 @@ char* server_request(const char *endpoint, const char *method, const char *json_
     char url[512];
     snprintf(url, sizeof(url), "%s%s", g_config.server_url, endpoint);
     
-    printf("[DEBUG] HTTP请求信息:\n");
-    printf("[DEBUG]   方法: %s\n", method);
-    printf("[DEBUG]   端点: %s\n", endpoint);
-    printf("[DEBUG]   完整URL: %s\n", url);
+    //printf("[DEBUG] HTTP请求信息:\n");
+    //printf("[DEBUG]   方法: %s\n", method);
+    //printf("[DEBUG]   端点: %s\n", endpoint);
+    //printf("[DEBUG]   完整URL: %s\n", url);
     if (json_data) {
-        printf("[DEBUG]   请求体: %s\n", json_data);
+        //printf("[DEBUG]   请求体: %s\n", json_data);
     }
     
     /* 初始化响应缓冲区 */
@@ -455,7 +464,7 @@ char* server_request(const char *endpoint, const char *method, const char *json_
     }
     
     /* 执行请求 */
-    printf("[DEBUG] 正在发送HTTP请求...\n");
+    //printf("[DEBUG] 正在发送HTTP请求...\n");
     CURLcode res = curl_easy_perform(curl);
     
     /* 获取HTTP状态码 */
@@ -473,9 +482,9 @@ char* server_request(const char *endpoint, const char *method, const char *json_
         return NULL;
     }
     
-    printf("[DEBUG] HTTP响应状态码: %ld\n", http_code);
+    //printf("[DEBUG] HTTP响应状态码: %ld\n", http_code);
     if (response.data && response.size > 0) {
-        printf("[DEBUG] 响应内容: %s\n", response.data);
+        //printf("[DEBUG] 响应内容: %s\n", response.data);
     }
     
     return response.data;

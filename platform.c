@@ -41,8 +41,8 @@ int init_platform(void)
 
     
 #else
-    /* Linux平台：通常默认使用UTF-8，无需特殊处理 */
+    /* Linux平台：通常默认使用UTF-8，无需特殊处理 输入输出默认为UTF-8*/
 #endif
     
-    return 0;
+    return 0; //成功标志
 }

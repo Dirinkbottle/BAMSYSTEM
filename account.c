@@ -28,6 +28,299 @@
 
 static unsigned char g_system_key[16];  /* 128位系统密钥 */
 static bool g_key_loaded = false;       /* 密钥是否已加载 */
+static AccountHashTable g_hash_table;   /* 全局账户 Hash 表 */
+static bool g_hash_table_initialized = false;  /* Hash 表是否已初始化 */
+
+/* ==================== Hash 表常量配置 ==================== */
+
+#define INITIAL_HASH_TABLE_SIZE 16    /* 初始桶数量 */
+#define LOAD_FACTOR_THRESHOLD 0.75    /* 扩容阈值 */
+
+/* ==================== Hash 表内部函数声明 ==================== */
+
+static unsigned long hash_function(const char *str, size_t table_size);
+static double calculate_load_factor(void);
+static bool resize_hash_table(void);
+
+/* ==================== Hash 表实现 ==================== */
+
+/**
+ * @brief Hash 函数（DJB2 算法）
+ * @param str 字符串（UUID）
+ * @param table_size 表大小
+ * @return Hash 值（桶索引）
+ */
+static unsigned long hash_function(const char *str, size_t table_size)
+{
+    unsigned long hash = 5381;
+    int c;
+    
+    while ((c = *str++)) {
+        hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
+    }
+    
+    return hash % table_size;
+}
+
+/**
+ * @brief 计算当前负载因子
+ * @return 负载因子
+ */
+static double calculate_load_factor(void)
+{
+    if (g_hash_table.size == 0) {
+        return 0.0;
+    }
+    return (double)g_hash_table.count / (double)g_hash_table.size;
+}
+
+/**
+ * @brief 扩容 Hash 表
+ * @return 成功返回true，失败返回false
+ */
+static bool resize_hash_table(void)
+{
+    size_t new_size = g_hash_table.size * 2;
+    
+    printf("[Hash] 正在扩容 Hash 表：%zu -> %zu\n", g_hash_table.size, new_size);
+    
+    /* 分配新的桶数组 */
+    AccountNode **new_buckets = (AccountNode **)calloc(new_size, sizeof(AccountNode *));
+    if (new_buckets == NULL) {
+        fprintf(stderr, "错误：扩容 Hash 表时内存分配失败\n");
+        return false;
+    }
+    
+    /* 重新哈希所有节点 */
+    for (size_t i = 0; i < g_hash_table.size; i++) {
+        AccountNode *current = g_hash_table.buckets[i];
+        
+        while (current != NULL) {
+            AccountNode *next = current->next;
+            
+            /* 计算新的桶索引 */
+            unsigned long new_index = hash_function(current->account.UUID, new_size);
+            
+            /* 插入到新桶（头插法） */
+            current->next = new_buckets[new_index];
+            new_buckets[new_index] = current;
+            
+            current = next;
+        }
+    }
+    
+    /* 释放旧桶数组 */
+    free(g_hash_table.buckets);
+    
+    /* 更新 Hash 表 */
+    g_hash_table.buckets = new_buckets;
+    g_hash_table.size = new_size;
+    
+    printf("[Hash] 扩容完成，当前负载因子: %.2f\n", calculate_load_factor());
+    
+    return true;
+}
+
+/**
+ * @brief 初始化账户 Hash 表
+ */
+bool init_account_hash_table(void)
+{
+    if (g_hash_table_initialized) {
+        return true;
+    }
+    
+    printf("[Hash] 正在初始化账户 Hash 表...\n");
+    
+    /* 分配桶数组 */
+    g_hash_table.buckets = (AccountNode **)calloc(INITIAL_HASH_TABLE_SIZE, sizeof(AccountNode *));
+    if (g_hash_table.buckets == NULL) {
+        fprintf(stderr, "错误：Hash 表初始化失败（内存分配失败）\n");
+        return false;
+    }
+    
+    g_hash_table.size = INITIAL_HASH_TABLE_SIZE;
+    g_hash_table.count = 0;
+    g_hash_table.load_factor_threshold = LOAD_FACTOR_THRESHOLD;
+    
+    g_hash_table_initialized = true;
+    
+    printf("[Hash] Hash 表初始化成功（初始大小: %zu）\n", g_hash_table.size);
+    
+    return true;
+}
+
+/**
+ * @brief 清理账户 Hash 表
+ */
+void cleanup_account_hash_table(void)
+{
+    if (!g_hash_table_initialized) {
+        return;
+    }
+    
+    printf("[Hash] 正在清理 Hash 表...\n");
+    
+    /* 释放所有节点 */
+    for (size_t i = 0; i < g_hash_table.size; i++) {
+        AccountNode *current = g_hash_table.buckets[i];
+        
+        while (current != NULL) {
+            AccountNode *next = current->next;
+            free(current);
+            current = next;
+        }
+    }
+    
+    /* 释放桶数组 */
+    free(g_hash_table.buckets);
+    
+    g_hash_table.buckets = NULL;
+    g_hash_table.size = 0;
+    g_hash_table.count = 0;
+    g_hash_table_initialized = false;
+    
+    printf("[Hash] Hash 表清理完成\n");
+}
+
+/**
+ * @brief 插入账户到 Hash 表
+ */
+bool hash_insert_account(const ACCOUNT *acc)
+{
+    if (!g_hash_table_initialized) {
+        fprintf(stderr, "错误：Hash 表未初始化\n");
+        return false;
+    }
+    
+    /* 检查是否需要扩容 */
+    if (calculate_load_factor() >= g_hash_table.load_factor_threshold) {
+        if (!resize_hash_table()) {
+            return false;
+        }
+    }
+    
+    /* 计算桶索引 */
+    unsigned long index = hash_function(acc->UUID, g_hash_table.size);
+    
+    /* 检查是否已存在（避免重复插入） */
+    AccountNode *current = g_hash_table.buckets[index];
+    while (current != NULL) {
+        if (strcmp(current->account.UUID, acc->UUID) == 0) {
+            /* 账户已存在，更新数据 */
+            current->account = *acc;
+            return true;
+        }
+        current = current->next;
+    }
+    
+    /* 创建新节点 */
+    AccountNode *new_node = (AccountNode *)malloc(sizeof(AccountNode));
+    if (new_node == NULL) {
+        fprintf(stderr, "错误：插入账户时内存分配失败\n");
+        return false;
+    }
+    
+    new_node->account = *acc;
+    new_node->next = g_hash_table.buckets[index];
+    g_hash_table.buckets[index] = new_node;
+    
+    g_hash_table.count++;
+    
+    return true;
+}
+
+/**
+ * @brief 从 Hash 表查找账户
+ */
+ACCOUNT* hash_find_account(const char *uuid)
+{
+    if (!g_hash_table_initialized) {
+        return NULL;
+    }
+    
+    /* 计算桶索引 */
+    unsigned long index = hash_function(uuid, g_hash_table.size);
+    
+    /* 遍历链表查找 */
+    AccountNode *current = g_hash_table.buckets[index];
+    while (current != NULL) {
+        if (strcmp(current->account.UUID, uuid) == 0) {
+            return &current->account;
+        }
+        current = current->next;
+    }
+    
+    return NULL;
+}
+
+/**
+ * @brief 更新 Hash 表中的账户
+ */
+bool hash_update_account(const ACCOUNT *acc)
+{
+    if (!g_hash_table_initialized) {
+        fprintf(stderr, "错误：Hash 表未初始化\n");
+        return false;
+    }
+    
+    /* 计算桶索引 */
+    unsigned long index = hash_function(acc->UUID, g_hash_table.size);
+    
+    /* 查找并更新 */
+    AccountNode *current = g_hash_table.buckets[index];
+    while (current != NULL) {
+        if (strcmp(current->account.UUID, acc->UUID) == 0) {
+            current->account = *acc;
+            return true;
+        }
+        current = current->next;
+    }
+    
+    /* 账户不存在，插入新账户 */
+    return hash_insert_account(acc);
+}
+
+/**
+ * @brief 从 Hash 表删除账户
+ */
+bool hash_delete_account(const char *uuid)
+{
+    if (!g_hash_table_initialized) {
+        fprintf(stderr, "错误：Hash 表未初始化\n");
+        return false;
+    }
+    
+    /* 计算桶索引 */
+    unsigned long index = hash_function(uuid, g_hash_table.size);
+    
+    /* 查找并删除 */
+    AccountNode *current = g_hash_table.buckets[index];
+    AccountNode *prev = NULL;
+    
+    while (current != NULL) {
+        if (strcmp(current->account.UUID, uuid) == 0) {
+            /* 找到节点，删除 */
+            if (prev == NULL) {
+                /* 删除头节点 */
+                g_hash_table.buckets[index] = current->next;
+            } else {
+                /* 删除中间或尾节点 */
+                prev->next = current->next;
+            }
+            
+            free(current);
+            g_hash_table.count--;
+            
+            return true;
+        }
+        
+        prev = current;
+        current = current->next;
+    }
+    
+    return false;  /* 账户不存在 */
+}
 
 /* ==================== 系统初始化 ==================== */
 
@@ -56,7 +349,84 @@ bool init_account_system(void)
         return false;
     }
     
+    /* 初始化 Hash 表 */
+    if (!init_account_hash_table()) {
+        fprintf(stderr, "错误：无法初始化账户 Hash 表\n");
+        return false;
+    }
+    
+    /* 加载所有本地账户到 Hash 表 */
+    printf("[Hash] 正在加载本地账户到 Hash 表...\n");
+    int loaded_count = 0;
+    
+#ifdef _WIN32
+    /* Windows平台 */
+    struct _finddata_t fileinfo;
+    intptr_t handle = _findfirst("Card/*.card", &fileinfo);
+    
+    if (handle != -1) {
+        do {
+            /* 提取UUID */
+            char uuid[37];
+            strncpy(uuid, fileinfo.name, 36);
+            uuid[36] = '\0';
+            
+            /* 移除.card后缀 */
+            char *dot = strrchr(uuid, '.');
+            if (dot) *dot = '\0';
+            
+            /* 加载账户并插入 Hash 表 */
+            ACCOUNT acc;
+            if (load_account(uuid, &acc)) {
+                if (hash_insert_account(&acc)) {
+                    loaded_count++;
+                }
+            }
+        } while (_findnext(handle, &fileinfo) == 0);
+        
+        _findclose(handle);
+    }
+#else
+    /* Linux平台 */
+    DIR *dir = opendir("Card");
+    if (dir != NULL) {
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            /* 只处理.card文件 */
+            if (strstr(entry->d_name, ".card") == NULL) {
+                continue;
+            }
+            
+            /* 提取UUID */
+            char uuid[37];
+            strncpy(uuid, entry->d_name, 36);
+            uuid[36] = '\0';
+            
+            /* 加载账户并插入 Hash 表 */
+            ACCOUNT acc;
+            if (load_account(uuid, &acc)) {
+                if (hash_insert_account(&acc)) {
+                    loaded_count++;
+                }
+            }
+        }
+        
+        closedir(dir);
+    }
+#endif
+    
+    printf("[Hash] 已加载 %d 个账户到 Hash 表\n", loaded_count);
+    printf("[Hash] 当前负载因子: %.2f\n", calculate_load_factor());
+    
     return true;
+}
+
+/**
+ * @brief 清理账户系统资源
+ */
+void cleanup_account_system(void)
+{
+    cleanup_account_hash_table();
 }
 
 /* ==================== UUID生成（跨平台） ==================== */
@@ -217,6 +587,10 @@ bool save_account(const ACCOUNT *acc)
     fwrite(buffer, 1, sizeof(buffer), file);
     
     fclose(file);
+    
+    /* 同步更新 Hash 表 */
+    hash_update_account(acc);
+    
     return true;
 }
 
@@ -225,6 +599,14 @@ bool save_account(const ACCOUNT *acc)
  */
 bool load_account(const char *uuid, ACCOUNT *acc)
 {
+    /* 首先尝试从 Hash 表查找 */
+    ACCOUNT *cached_acc = hash_find_account(uuid);
+    if (cached_acc != NULL) {
+        *acc = *cached_acc;
+        return true;
+    }
+    
+    /* Hash 表未命中，从文件读取 */
     char filename[50];
     snprintf(filename, sizeof(filename), "Card/%s.card", uuid);
     
@@ -256,6 +638,9 @@ bool load_account(const char *uuid, ACCOUNT *acc)
     /* 提取数据 */
     memcpy(&acc->PASSWORD, buffer, sizeof(LLUINT));
     memcpy(&acc->BALANCE, buffer + sizeof(LLUINT), sizeof(LLUINT));
+    
+    /* 加载成功后，插入 Hash 表以加速后续查找 */
+    hash_insert_account(acc);
     
     return true;
 }
@@ -406,7 +791,7 @@ int sync_all_accounts_to_server(void)
     }
     
     /* 获取所有本地账户UUID */
-    char uuids[100][37];  /* 最多100个账户 */
+    char uuids[100][37];  /* 最多100个账户,虽然需求要求支持50个但是实际可以非常多 */
     int total_count = get_all_account_uuids(uuids, 100);
     
     if (total_count == 0) {
@@ -428,15 +813,15 @@ int sync_all_accounts_to_server(void)
             continue;
         }
         
-        printf("[推送] 正在推送账户 %s (余额: %.2f元)...\n", 
-               acc.UUID, acc.BALANCE / 100.0);
+        //printf("[推送] 正在推送账户 %s (余额: %.2f元)...\n", 
+        //       acc.UUID, acc.BALANCE / 100.0);
         
         /* 调用同步API */
         if (api_sync_account(&acc)) {
-            printf("[推送] ✓ 账户 %s 推送成功\n", acc.UUID);
+            //printf("[推送] ✓ 账户 %s 推送成功\n", acc.UUID);
             success_count++;
         } else {
-            fprintf(stderr, "[推送] ✗ 账户 %s 推送失败\n", acc.UUID);
+            //fprintf(stderr, "[推送] ✗ 账户 %s 推送失败\n", acc.UUID);
             fail_count++;
         }
     }
@@ -486,8 +871,8 @@ int pull_accounts_from_server(void)
         if (exists) {
             /* 本地已存在，比较并更新余额 */
             if (local_acc.BALANCE != acc->BALANCE) {
-                printf("[拉取] 更新账户 %s 余额: %.2f元 -> %.2f元\n",
-                       acc->UUID, local_acc.BALANCE / 100.0, acc->BALANCE / 100.0);
+                //printf("[拉取] 更新账户 %s 余额: %.2f元 -> %.2f元\n",
+                //       acc->UUID, local_acc.BALANCE / 100.0, acc->BALANCE / 100.0);
                 
                 /* 保留本地密码 */
                 acc->PASSWORD = local_acc.PASSWORD;
@@ -495,25 +880,25 @@ int pull_accounts_from_server(void)
                 if (save_account(acc)) {
                     success_count++;
                 } else {
-                    fprintf(stderr, "[拉取] ✗ 更新账户 %s 失败\n", acc->UUID);
+                    //fprintf(stderr, "[拉取] ✗ 更新账户 %s 失败\n", acc->UUID);
                     fail_count++;
                 }
             } else {
-                printf("[拉取] 账户 %s 无需更新\n", acc->UUID);
+                //printf("[拉取] 账户 %s 无需更新\n", acc->UUID);
                 success_count++;
             }
         } else {
             /* 本地不存在，新建账户（密码设为0） */
-            printf("[拉取] 新增账户 %s (余额: %.2f元)\n",
-                   acc->UUID, acc->BALANCE / 100.0);
+            //printf("[拉取] 新增账户 %s (余额: %.2f元)\n",
+            //       acc->UUID, acc->BALANCE / 100.0);
             
             acc->PASSWORD = 0;  /* 新账户默认密码为0 */
             
             if (save_account(acc)) {
                 success_count++;
-                printf("[拉取] ✓ 账户 %s 保存成功（注意：密码已设为0000000）\n", acc->UUID);
+                //printf("[拉取] ✓ 账户 %s 保存成功（注意：密码已设为0000000）\n", acc->UUID);
             } else {
-                fprintf(stderr, "[拉取] ✗ 保存账户 %s 失败\n", acc->UUID);
+                //fprintf(stderr, "[拉取] ✗ 保存账户 %s 失败\n", acc->UUID);
                 fail_count++;
             }
         }
@@ -535,6 +920,9 @@ bool delete_account_file(const char *uuid)
         perror("错误：无法删除账户文件");
         return false;
     }
+    
+    /* 同步从 Hash 表删除 */
+    hash_delete_account(uuid);
     
     return true;
 }
@@ -876,6 +1264,14 @@ bool delete_account(void)
    PRINTF_G("\n账户信息：\n");
    PRINTF_G("UUID: %s\n", acc.UUID);
    PRINTF_G("余额: %.2f 元\n", acc.BALANCE / 100.0);
+
+   /* 账户有余额不能注销 */
+   if (acc.BALANCE > 0)
+   {
+       PRINTF_G("错误：账户有余额，不能注销\n");
+       return false;
+   }
+   
     
     /* 二次确认 */
     char confirm[10];
@@ -904,5 +1300,32 @@ bool delete_account(void)
     
    PRINTF_G("\n销户成功！\n\n");
     
+    return true;
+}
+
+/**
+ * @brief 测试函数，随机生成N个账户进行压力测试
+ * @note  测试运用Hash表后的响应速度
+ */
+bool generate_test_account(){
+    int count=0;
+    PRINTF_G("请输入测试账户的数量:");
+    scanf("%d",&count);
+    
+    /*合法性检查*/
+    if (count<=0 || count > 1000000)
+    {
+        /* 错误！ */
+        return false;
+    }
+    
+
+    /* 循环生成测试账户 */
+    for (int i = 0; i < count; i++)
+    {
+        LLUINT password = 1234567;
+        create_account(password);
+    }
+
     return true;
 }
