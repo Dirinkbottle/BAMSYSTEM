@@ -14,6 +14,7 @@
 #define UI_H
 
 /* ==================== 标准库头文件 ==================== */
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -71,6 +72,23 @@ void clear_screen(void);
  * @note 菜单项的具体内容在ui.c中定义
  */
 void output_business(void);
+
+
+/**
+ * @brief UI按键枚举类型
+ * 
+ * 用于表示用户界面接收到的按键操作。
+ */
+typedef enum {
+    UI_KEY_NONE = 0,
+    UI_KEY_UP,
+    UI_KEY_DOWN,
+    UI_KEY_ENTER,
+    UI_KEY_ESC
+} UiKey;
+
+void ui_set_raw_mode(bool enable);
+UiKey ui_read_key(void);
 
 /**
  * @brief UI主循环函数

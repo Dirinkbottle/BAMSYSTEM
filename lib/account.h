@@ -59,7 +59,10 @@ typedef struct
     double load_factor_threshold; /** 扩容阈值（默认 0.75） */
 } AccountHashTable;
 
-
+typedef enum {
+    ACCOUNT_SORT_BALANCE = 0,
+    ACCOUNT_SORT_UUID_TIME = 1
+} AccountSortMode;
 
 /* ==================== 系统初始化 ==================== */
 
@@ -175,6 +178,18 @@ bool load_account(const char *uuid, ACCOUNT *acc);
  * @return 账户数量
  */
 int list_all_accounts(void);
+
+/**
+ * @brief 设置账户列表排序模式
+ * @param mode 排序模式
+ */
+void set_account_sort_mode(AccountSortMode mode);
+
+/**
+ * @brief 获取账户列表排序模式
+ * @return 当前排序模式
+ */
+AccountSortMode get_account_sort_mode(void);
 
 /**
  * @brief 删除账户文件

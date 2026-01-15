@@ -1,6 +1,6 @@
 # BAMSYSTEM Makefile
 # 支持 Windows 和 Linux 平台编译
-# 支持在 Ubuntu 中使用 MinGW64 交叉编译 Windows 版本
+# 支持使用 MinGW64 交叉编译 Windows 版本
 
 # 默认编译器
 CC = gcc
@@ -127,6 +127,7 @@ $(TARGET): $(OBJS)
 clean:
 	$(SHELL_RM) $(OBJS) 2>/dev/null || true
 	$(SHELL_RM) bamsystem bamsystem.exe 2>/dev/null || true
+	@make -C test clean
 	@echo "清理完成"
 
 # 清理所有文件（包括生成的数据）

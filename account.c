@@ -11,7 +11,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #ifdef _WIN32
     #include <direct.h>
@@ -21,6 +23,7 @@
     #define F_OK 0 //文件存在标识符
 #else
     #include <dirent.h>
+    #include <pthread.h>
     #include <unistd.h>
 #endif
 
@@ -30,6 +33,67 @@ static unsigned char g_system_key[16];  /* 128位系统密钥 */
 static bool g_key_loaded = false;       /* 密钥是否已加载 */
 static AccountHashTable g_hash_table;   /* 全局账户 Hash 表 */
 static bool g_hash_table_initialized = false;  /* Hash 表是否已初始化 */
+
+ static AccountSortMode g_account_sort_mode = ACCOUNT_SORT_BALANCE;
+
+#ifdef _WIN32
+ static CRITICAL_SECTION g_account_op_lock;
+ static bool g_account_op_lock_inited = false;
+#else
+ static pthread_mutex_t g_account_op_lock = PTHREAD_MUTEX_INITIALIZER;
+ static bool g_account_op_lock_inited = false;
+#endif
+
+ static void account_op_lock_init(void)
+ {
+     if (g_account_op_lock_inited) {
+         return;
+     }
+#ifdef _WIN32
+     InitializeCriticalSection(&g_account_op_lock);
+#endif
+     g_account_op_lock_inited = true;
+ }
+
+ static void account_op_lock_destroy(void)
+ {
+     if (!g_account_op_lock_inited) {
+         return;
+     }
+#ifdef _WIN32
+     DeleteCriticalSection(&g_account_op_lock);
+#endif
+     g_account_op_lock_inited = false;
+ }
+
+ static void account_op_lock(void)
+ {
+     account_op_lock_init();
+#ifdef _WIN32
+     EnterCriticalSection(&g_account_op_lock);
+#else
+     pthread_mutex_lock(&g_account_op_lock);
+#endif
+ }
+
+ static void account_op_unlock(void)
+ {
+#ifdef _WIN32
+     LeaveCriticalSection(&g_account_op_lock);
+#else
+     pthread_mutex_unlock(&g_account_op_lock);
+#endif
+ }
+
+ void set_account_sort_mode(AccountSortMode mode)
+ {
+     g_account_sort_mode = mode;
+ }
+
+ AccountSortMode get_account_sort_mode(void)
+ {
+     return g_account_sort_mode;
+ }
 
 /* ==================== Hash 表常量配置 ==================== */
 
@@ -354,6 +418,8 @@ bool init_account_system(void)
         fprintf(stderr, "错误：无法初始化账户 Hash 表\n");
         return false;
     }
+
+    account_op_lock_init();
     
     /* 加载所有本地账户到 Hash 表 */
     printf("[Hash] 正在加载本地账户到 Hash 表...\n");
@@ -427,6 +493,7 @@ bool init_account_system(void)
 void cleanup_account_system(void)
 {
     cleanup_account_hash_table();
+    account_op_lock_destroy();
 }
 
 /* ==================== UUID生成（跨平台） ==================== */
@@ -645,80 +712,163 @@ bool load_account(const char *uuid, ACCOUNT *acc)
     return true;
 }
 
+typedef struct {
+    ACCOUNT acc;
+    time_t mtime;
+} AccountListItem;
+
+static int cmp_by_balance_desc(const void *a, const void *b)
+{
+    const AccountListItem *aa = (const AccountListItem *)a;
+    const AccountListItem *bb = (const AccountListItem *)b;
+    if (aa->acc.BALANCE < bb->acc.BALANCE) return 1;
+    if (aa->acc.BALANCE > bb->acc.BALANCE) return -1;
+    return strcmp(aa->acc.UUID, bb->acc.UUID);
+}
+
+static int cmp_by_mtime_desc(const void *a, const void *b)
+{
+    const AccountListItem *aa = (const AccountListItem *)a;
+    const AccountListItem *bb = (const AccountListItem *)b;
+    if (aa->mtime < bb->mtime) return 1;
+    if (aa->mtime > bb->mtime) return -1;
+    return strcmp(aa->acc.UUID, bb->acc.UUID);
+}
+
+static int load_account_list(AccountListItem **out_items)
+{
+    *out_items = NULL;
+
+    char uuids[100][37];
+    int n = get_all_account_uuids(uuids, 100);
+    if (n <= 0) {
+        return 0;
+    }
+
+    AccountListItem *items = (AccountListItem *)calloc((size_t)n, sizeof(AccountListItem));
+    if (!items) {
+        return 0;
+    }
+
+    int actual = 0;
+    for (int i = 0; i < n; i++) {
+        ACCOUNT acc2;
+        if (!load_account(uuids[i], &acc2)) {
+            continue;
+        }
+
+        items[actual].acc = acc2;
+        items[actual].mtime = 0;
+
+        char filename[64];
+        snprintf(filename, sizeof(filename), "Card/%s.card", uuids[i]);
+        struct stat st;
+        if (stat(filename, &st) == 0) {
+            items[actual].mtime = st.st_mtime;
+        }
+
+        actual++;
+    }
+
+    if (actual == 0) {
+        free(items);
+        return 0;
+    }
+
+    *out_items = items;
+    return actual;
+}
+
+static bool select_account_uuid(char out_uuid[37])
+{
+    AccountListItem *items = NULL;
+    int count = load_account_list(&items);
+    if (count <= 0) {
+        PRINTF_G("暂无账户\n");
+        return false;
+    }
+
+    if (g_account_sort_mode == ACCOUNT_SORT_UUID_TIME) {
+        qsort(items, (size_t)count, sizeof(AccountListItem), cmp_by_mtime_desc);
+    } else {
+        qsort(items, (size_t)count, sizeof(AccountListItem), cmp_by_balance_desc);
+    }
+
+    ui_set_raw_mode(true);
+    int selected = 0;
+
+    while (1) {
+        clear_screen();
+        PRINTF_G("========== 选择账户 (↑↓选择, 回车确认, ESC取消) =========\n");
+        if (g_account_sort_mode == ACCOUNT_SORT_UUID_TIME) {
+            PRINTF_G("当前排序: 按UUID时间\n\n");
+        } else {
+            PRINTF_G("当前排序: 按余额\n\n");
+        }
+
+        for (int i = 0; i < count; i++) {
+            if (i == selected) {
+                printf("\033[7m");
+                PRINTF_G("%2d. UUID: %s  余额: %.2f 元\n", i + 1, items[i].acc.UUID, items[i].acc.BALANCE / 100.0);
+                printf("\033[0m");
+            } else {
+                PRINTF_G("%2d. UUID: %s  余额: %.2f 元\n", i + 1, items[i].acc.UUID, items[i].acc.BALANCE / 100.0);
+            }
+        }
+
+        UiKey key = ui_read_key();
+        if (key == UI_KEY_UP) {
+            selected = (selected - 1 + count) % count;
+            continue;
+        }
+        if (key == UI_KEY_DOWN) {
+            selected = (selected + 1) % count;
+            continue;
+        }
+        if (key == UI_KEY_ESC) {
+            ui_set_raw_mode(false);
+            free(items);
+            return false;
+        }
+        if (key == UI_KEY_ENTER) {
+            strncpy(out_uuid, items[selected].acc.UUID, 37);
+            out_uuid[36] = '\0';
+            ui_set_raw_mode(false);
+            free(items);
+            return true;
+        }
+    }
+}
+
 /**
  * @brief 列出所有账户
  */
 int list_all_accounts(void)
 {
-    int count = 0;
-    
-   PRINTF_G("\n========== 账户列表 ==========\n");
-    
-#ifdef _WIN32
-    /* Windows平台 */
-    struct _finddata_t fileinfo;
-    intptr_t handle = _findfirst("Card/*.card", &fileinfo);
-    
-    if (handle == -1) {
-       PRINTF_G("暂无账户\n");
-        return 0;
-    }
-    
-    do {
-        /* 提取UUID */
-        char uuid[37];
-        strncpy(uuid, fileinfo.name, 36);
-        uuid[36] = '\0';
-        
-        /* 移除.card后缀 */
-        char *dot = strrchr(uuid, '.');
-        if (dot) *dot = '\0';
-        
-        /* 加载账户 */
-        ACCOUNT acc;
-        if (load_account(uuid, &acc)) {
-            count++;
-            PRINTF_G("%d. UUID: %s\n", count, acc.UUID);
-            PRINTF_G("   余额: %.2f 元\n", acc.BALANCE / 100.0); //注意BALANCE单位是分
-        }
-    } while (_findnext(handle, &fileinfo) == 0);
-    
-    _findclose(handle);
-#else
-    /* Linux平台 */
-    DIR *dir = opendir("Card");
-    if (dir == NULL) {
+    AccountListItem *items = NULL;
+    int count = load_account_list(&items);
+
+    PRINTF_G("\n========== 账户列表 ==========\n");
+    if (count <= 0) {
         PRINTF_G("暂无账户\n");
         return 0;
     }
-    
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
-        /* 只处理.card文件 */
-        if (strstr(entry->d_name, ".card") == NULL) {
-            continue;
-        }
-        
-        /* 提取UUID */
-        char uuid[37];
-        strncpy(uuid, entry->d_name, 36);
-        uuid[36] = '\0';
-        
-        /* 加载账户 */
-        ACCOUNT acc;
-        if (load_account(uuid, &acc)) {
-            count++;
-            PRINTF_G("%d. UUID: %s\n", count, acc.UUID);
-            PRINTF_G("   余额: %.2f 元\n", acc.BALANCE / 100.0);
-        }
+
+    if (g_account_sort_mode == ACCOUNT_SORT_UUID_TIME) {
+        qsort(items, (size_t)count, sizeof(AccountListItem), cmp_by_mtime_desc);
+    } else {
+        qsort(items, (size_t)count, sizeof(AccountListItem), cmp_by_balance_desc);
     }
-    
-    closedir(dir);
-#endif
-    
+
+    for (int i = 0; i < count; i++) {
+        PRINTF_G("%d. UUID: %s\n", i + 1, items[i].acc.UUID);
+        PRINTF_G("   余额: %.2f 元\n", items[i].acc.BALANCE / 100.0);
+    }
+
+    free(items);
+
     PRINTF_G("==============================\n");
     PRINTF_G("共 %d 个账户\n\n", count);
-    
     return count;
 }
 
@@ -972,16 +1122,8 @@ bool create_account(LLUINT password)
  */
 bool deposit(void)
 {
-    /* 列出所有账户 */
-    if (list_all_accounts() == 0) {
-        return false;
-    }
-    
-    /* 输入UUID */
     char uuid[37];
-    PRINTF_G("请输入账户UUID: ");
-    if (scanf("%36s", uuid) != 1) {
-        fprintf(stderr, "输入错误\n");
+    if (!select_account_uuid(uuid)) {
         return false;
     }
     
@@ -1013,14 +1155,28 @@ bool deposit(void)
         return false;
     }
     
-    /* 更新余额 */
+    if (amount > (double)(ULLONG_MAX / 100ULL)) {
+        fprintf(stderr, "错误：金额过大\n");
+        return false;
+    }
+
     LLUINT amount_cents = (LLUINT)(amount * 100);
+
+    account_op_lock();
+    if (acc.BALANCE > (LLUINT)(ULLONG_MAX - amount_cents)) {
+        account_op_unlock();
+        fprintf(stderr, "错误：余额溢出\n");
+        return false;
+    }
+
     acc.BALANCE += amount_cents;
     
     /* 保存到本地 */
     if (!save_account(&acc)) {
+        account_op_unlock();
         return false;
     }
+    account_op_unlock();
     
     /* 服务器模式下同步到服务器 */
     if (get_run_mode() == MODE_SERVER) {
@@ -1042,16 +1198,8 @@ bool deposit(void)
  */
 bool withdraw(void)
 {
-    /* 列出所有账户 */
-    if (list_all_accounts() == 0) {
-        return false;
-    }
-    
-    /* 输入UUID */
     char uuid[37];
-   PRINTF_G("请输入账户UUID: ");
-    if (scanf("%36s", uuid) != 1) {
-        fprintf(stderr, "输入错误\n");
+    if (!select_account_uuid(uuid)) {
         return false;
     }
     
@@ -1085,6 +1233,11 @@ bool withdraw(void)
         fprintf(stderr, "错误：金额无效\n");
         return false;
     }
+
+    if (amount > (double)(ULLONG_MAX / 100ULL)) {
+        fprintf(stderr, "错误：金额过大\n");
+        return false;
+    }
     
     LLUINT amount_cents = (LLUINT)(amount * 100);
     
@@ -1094,13 +1247,15 @@ bool withdraw(void)
         return false;
     }
     
-    /* 更新余额 */
+    account_op_lock();
     acc.BALANCE -= amount_cents;
     
     /* 保存到本地 */
     if (!save_account(&acc)) {
+        account_op_unlock();
         return false;
     }
+    account_op_unlock();
     
     /* 服务器模式下同步到服务器 */
     if (get_run_mode() == MODE_SERVER) {
@@ -1122,18 +1277,8 @@ bool withdraw(void)
  */
 bool transfer(void)
 {
-    
-
-    /* 列出所有账户 */
-    if (list_all_accounts() == 0) {
-        return false;
-    }
-    
-    /* 输入转出账户UUID */
     char uuid_from[37];
-   PRINTF_G("请输入转出账户UUID: ");
-    if (scanf("%36s", uuid_from) != 1) {
-        fprintf(stderr, "输入错误\n");
+    if (!select_account_uuid(uuid_from)) {
         return false;
     }
     
@@ -1157,11 +1302,8 @@ bool transfer(void)
         return false;
     }
     
-    /* 输入转入账户UUID */
     char uuid_to[37];
-   PRINTF_G("请输入转入账户UUID: ");
-    if (scanf("%36s", uuid_to) != 1) {
-        fprintf(stderr, "输入错误\n");
+    if (!select_account_uuid(uuid_to)) {
         return false;
     }
     
@@ -1188,7 +1330,12 @@ bool transfer(void)
         fprintf(stderr, "错误：金额无效\n");
         return false;
     }
-    
+
+    if (amount > (double)(ULLONG_MAX / 100ULL)) {
+        fprintf(stderr, "错误：金额过大\n");
+        return false;
+    }
+
     LLUINT amount_cents = (LLUINT)(amount * 100);
     
     /* 检查余额 */
@@ -1197,15 +1344,26 @@ bool transfer(void)
         return false;
     }
     
+    account_op_lock();
+
+    if (acc_to.BALANCE > (LLUINT)(ULLONG_MAX - amount_cents)) {
+        account_op_unlock();
+        fprintf(stderr, "错误：转入账户余额溢出\n");
+        return false;
+    }
+
     /* 更新余额 */
     acc_from.BALANCE -= amount_cents;
     acc_to.BALANCE += amount_cents;
-    
+
     /* 保存两个账户到本地 */
     if (!save_account(&acc_from) || !save_account(&acc_to)) {
+        account_op_unlock();
         fprintf(stderr, "错误：保存账户失败\n");
         return false;
     }
+
+    account_op_unlock();
     
     /* 服务器模式下同步到服务器 */
     if (get_run_mode() == MODE_SERVER) {
@@ -1227,16 +1385,8 @@ bool transfer(void)
  */
 bool delete_account(void)
 {
-    /* 列出所有账户 */
-    if (list_all_accounts() == 0) {
-        return false;
-    }
-    
-    /* 输入UUID */
     char uuid[37];
-   PRINTF_G("请输入要注销的账户UUID: ");
-    if (scanf("%36s", uuid) != 1) {
-        fprintf(stderr, "输入错误\n");
+    if (!select_account_uuid(uuid)) {
         return false;
     }
     
@@ -1284,10 +1434,28 @@ bool delete_account(void)
         return false;
     }
     
-    /* 删除本地文件 */
-    if (!delete_account_file(uuid)) {
+    account_op_lock();
+
+    /* 再次加载并确认余额（防并发转账/存取后余额变化） */
+    ACCOUNT acc_latest;
+    if (!load_account(uuid, &acc_latest)) {
+        account_op_unlock();
+        fprintf(stderr, "错误：账户不存在\n");
         return false;
     }
+    if (acc_latest.BALANCE > 0) {
+        account_op_unlock();
+        fprintf(stderr, "错误：账户有余额，不能注销\n");
+        return false;
+    }
+
+    /* 删除本地文件 */
+    if (!delete_account_file(uuid)) {
+        account_op_unlock();
+        return false;
+    }
+
+    account_op_unlock();
     
     /* 服务器模式下同步到服务器 */
     if (get_run_mode() == MODE_SERVER) {

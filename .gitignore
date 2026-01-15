@@ -12,3 +12,5 @@ Card/*
 *.war
 *.ear
 *.zip
+Card/
+.vscode
